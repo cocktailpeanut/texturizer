@@ -2,6 +2,11 @@ module.exports = {
   run: [{
     method: "shell.run",
     params: {
+      message: "git pull"
+    }
+  }, {
+    method: "shell.run",
+    params: {
       path: "app/hunyuan3d",
       message: "git pull"
     }
@@ -17,4 +22,3 @@ module.exports = {
     }
   }]
 }
-
