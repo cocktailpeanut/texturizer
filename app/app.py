@@ -754,6 +754,72 @@ def transform_points(points: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     return (matrix @ homogeneous.T).T[:, :3]
 
 
+def fuller_end_sign(points: np.ndarray, axis: int) -> float:
+    bounds = np.array([points.min(axis=0), points.max(axis=0)], dtype=np.float64)
+    axis_size = bounds[1, axis] - bounds[0, axis]
+    if axis_size <= 1e-6:
+        return 1.0
+
+    threshold = axis_size * 0.2
+    negative_count = int(np.count_nonzero(points[:, axis] <= bounds[0, axis] + threshold))
+    positive_count = int(np.count_nonzero(points[:, axis] >= bounds[1, axis] - threshold))
+    if negative_count == positive_count:
+        return 1.0
+    return -1.0 if negative_count > positive_count else 1.0
+
+
+def orient_mesh_axes_to_template_world(mesh, template_world_positions: np.ndarray):
+    oriented = mesh.copy()
+    if isinstance(oriented, trimesh.Scene):
+        oriented = oriented.dump(concatenate=True)
+
+    source_vertices = np.asarray(oriented.vertices, dtype=np.float64)
+    if source_vertices.ndim != 2 or source_vertices.shape[1] != 3 or source_vertices.shape[0] == 0:
+        return oriented
+
+    source_bounds = np.array([source_vertices.min(axis=0), source_vertices.max(axis=0)], dtype=np.float64)
+    target_bounds = np.array(
+        [
+            template_world_positions.min(axis=0),
+            template_world_positions.max(axis=0),
+        ],
+        dtype=np.float64,
+    )
+    source_size = source_bounds[1] - source_bounds[0]
+    target_size = target_bounds[1] - target_bounds[0]
+    if not np.isfinite(source_size).all() or not np.isfinite(target_size).all():
+        return oriented
+
+    # Hunyuan emits Y-up geometry. AI4Animation templates are also Y-up in
+    # world space, but quadruped length may arrive on generated X instead of Z.
+    up_axis = 1
+    source_horizontal_axes = [axis for axis in range(3) if axis != up_axis]
+    target_horizontal_axes = [axis for axis in range(3) if axis != up_axis]
+    source_horizontal_axes.sort(key=lambda axis: source_size[axis])
+    target_horizontal_axes.sort(key=lambda axis: target_size[axis])
+
+    axis_map = {up_axis: up_axis}
+    for source_axis, target_axis in zip(source_horizontal_axes, target_horizontal_axes):
+        axis_map[target_axis] = source_axis
+
+    source_center = (source_bounds[0] + source_bounds[1]) * 0.5
+    centered = source_vertices - source_center
+    remapped = np.zeros_like(centered)
+    for target_axis in range(3):
+        source_axis = axis_map[target_axis]
+        sign = 1.0
+        if target_axis == target_horizontal_axes[-1] and source_axis != target_axis:
+            sign = fuller_end_sign(template_world_positions, target_axis) / fuller_end_sign(source_vertices, source_axis)
+        remapped[:, target_axis] = centered[:, source_axis] * sign
+
+    oriented.vertices = remapped.astype(np.float32)
+    try:
+        oriented.fix_normals()
+    except Exception:
+        pass
+    return oriented
+
+
 def prepare_generated_mesh_for_texture(mesh):
     if isinstance(mesh, trimesh.Scene):
         mesh = mesh.dump(concatenate=True)
@@ -807,6 +873,7 @@ def align_mesh_to_template_bounds(mesh, template_path: Path):
     aligned = mesh.copy()
     if isinstance(aligned, trimesh.Scene):
         aligned = aligned.dump(concatenate=True)
+    aligned = orient_mesh_axes_to_template_world(aligned, template_world_positions)
 
     source_bounds = np.asarray(aligned.bounds, dtype=np.float32)
     target_bounds = np.array(
