@@ -8,7 +8,7 @@ The intended workflow is:
 2. Upload an image, or provide a text prompt for AI mode.
 3. Use the default generated-character mode.
 4. Generate a textured character output.
-5. If the selected mesh is rigged, Texturizer transfers that skeleton onto the generated mesh. If no mesh is selected in the UI, it uses the bundled Geno rig.
+5. If the selected source mesh is rigged, Texturizer transfers that skeleton onto the generated mesh.
 
 ## What it is good for
 
@@ -28,10 +28,10 @@ The intended workflow is:
 
 1. Click `Install`.
 2. Click `Start Web App`.
-3. Upload a mesh, or select one of the bundled rig templates.
+3. Upload a source mesh, or choose `Geno biped` or `Dog quadruped` from the compact example previews.
 4. Upload an image or enter a prompt.
 5. Leave texture mode on `Generate character geometry + transfer rig` for the normal workflow.
-6. Leave rig transfer enabled if you need the result attached to the selected/bundled skeleton.
+6. Leave rig transfer enabled if you need the result attached to the selected source skeleton.
 7. Download the output `.glb`.
 
 ## Bundled examples
@@ -41,7 +41,7 @@ The launcher includes the AI4Animation default rigged meshes as:
 - `app/examples/geno.glb`
 - `app/examples/dog.glb`
 
-`geno.glb` matches the biped/Geno skeleton contract. `dog.glb` matches the quadruped locomotion skeleton contract. The web UI shows both as 3D previews so you can choose the target rig visually instead of selecting a text-only button.
+`geno.glb` matches the biped/Geno skeleton contract. `dog.glb` matches the quadruped locomotion skeleton contract. The web UI treats these as examples that fill the same source mesh slot as an uploaded GLB.
 
 ## API
 

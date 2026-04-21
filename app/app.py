@@ -657,6 +657,103 @@ def mesh_face_count(mesh) -> int:
     return int(len(faces)) if faces is not None else 0
 
 
+def quaternion_to_matrix(rotation: list[float]) -> np.ndarray:
+    x, y, z, w = [float(value) for value in rotation]
+    xx = x * x
+    yy = y * y
+    zz = z * z
+    xy = x * y
+    xz = x * z
+    yz = y * z
+    wx = w * x
+    wy = w * y
+    wz = w * z
+    return np.array(
+        [
+            [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy), 0.0],
+            [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx), 0.0],
+            [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy), 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+
+def node_transform_matrix(node) -> np.ndarray:
+    if node.matrix:
+        return np.asarray(node.matrix, dtype=np.float64).reshape((4, 4)).T
+
+    translation = np.eye(4, dtype=np.float64)
+    rotation = np.eye(4, dtype=np.float64)
+    scale = np.eye(4, dtype=np.float64)
+
+    if node.translation:
+        translation[:3, 3] = np.asarray(node.translation, dtype=np.float64)
+    if node.rotation:
+        rotation = quaternion_to_matrix(node.rotation)
+    if node.scale:
+        scale = np.diag(
+            [
+                float(node.scale[0]),
+                float(node.scale[1]),
+                float(node.scale[2]),
+                1.0,
+            ]
+        )
+    return translation @ rotation @ scale
+
+
+def node_world_matrices(gltf: GLTF2) -> dict[int, np.ndarray]:
+    nodes = gltf.nodes or []
+    child_nodes = {
+        child_index
+        for node in nodes
+        for child_index in (node.children or [])
+    }
+
+    if gltf.scenes and gltf.scene is not None and gltf.scenes[gltf.scene].nodes:
+        root_nodes = list(gltf.scenes[gltf.scene].nodes)
+    else:
+        root_nodes = [
+            index
+            for index in range(len(nodes))
+            if index not in child_nodes
+        ]
+
+    matrices: dict[int, np.ndarray] = {}
+
+    def visit(node_index: int, parent_matrix: np.ndarray) -> None:
+        node = nodes[node_index]
+        world_matrix = parent_matrix @ node_transform_matrix(node)
+        matrices[node_index] = world_matrix
+        for child_index in node.children or []:
+            visit(child_index, world_matrix)
+
+    for root_index in root_nodes:
+        visit(root_index, np.eye(4, dtype=np.float64))
+
+    return matrices
+
+
+def find_mesh_node_index(gltf: GLTF2, mesh_index: int) -> int:
+    for node_index, node in enumerate(gltf.nodes or []):
+        if node.mesh == mesh_index:
+            return node_index
+    raise RuntimeError("Rigged template mesh is not referenced by any node.")
+
+
+def transform_points(points: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+    point_array = np.asarray(points, dtype=np.float64)
+    homogeneous = np.concatenate(
+        [
+            point_array,
+            np.ones((point_array.shape[0], 1), dtype=np.float64),
+        ],
+        axis=1,
+    )
+    return (matrix @ homogeneous.T).T[:, :3]
+
+
 def prepare_generated_mesh_for_texture(mesh):
     if isinstance(mesh, trimesh.Scene):
         mesh = mesh.dump(concatenate=True)
@@ -690,13 +787,35 @@ def prepare_generated_mesh_for_texture(mesh):
 
 
 def align_mesh_to_template_bounds(mesh, template_path: Path):
-    template_mesh = load_mesh_geometry(template_path)
+    template = GLTF2().load_binary(str(template_path))
+    if not template.meshes or not template.meshes[0].primitives:
+        raise RuntimeError("Rigged template has no mesh primitives.")
+
+    template_primitive = template.meshes[0].primitives[0]
+    template_position_accessor = getattr(template_primitive.attributes, "POSITION", None)
+    if template_position_accessor is None:
+        raise RuntimeError("Rigged template is missing POSITION geometry.")
+
+    template_positions = read_accessor_array(template, template_position_accessor).astype(np.float32)
+    mesh_node_index = find_mesh_node_index(template, 0)
+    world_matrices = node_world_matrices(template)
+    mesh_node_world_matrix = world_matrices.get(mesh_node_index)
+    if mesh_node_world_matrix is None:
+        mesh_node_world_matrix = node_transform_matrix(template.nodes[mesh_node_index])
+    template_world_positions = transform_points(template_positions, mesh_node_world_matrix)
+
     aligned = mesh.copy()
     if isinstance(aligned, trimesh.Scene):
         aligned = aligned.dump(concatenate=True)
 
     source_bounds = np.asarray(aligned.bounds, dtype=np.float32)
-    target_bounds = np.asarray(template_mesh.bounds, dtype=np.float32)
+    target_bounds = np.array(
+        [
+            template_world_positions.min(axis=0),
+            template_world_positions.max(axis=0),
+        ],
+        dtype=np.float32,
+    )
     source_size = source_bounds[1] - source_bounds[0]
     target_size = target_bounds[1] - target_bounds[0]
 
@@ -715,7 +834,13 @@ def align_mesh_to_template_bounds(mesh, template_path: Path):
     aligned_center = (aligned_bounds[0] + aligned_bounds[1]) * 0.5
     vertices[:, 0] += target_center[0] - aligned_center[0]
     vertices[:, 2] += target_center[2] - aligned_center[2]
-    aligned.vertices = vertices
+
+    try:
+        template_local_matrix = np.linalg.inv(mesh_node_world_matrix)
+    except np.linalg.LinAlgError as exc:
+        raise RuntimeError("Rigged template mesh node transform is not invertible.") from exc
+
+    aligned.vertices = transform_points(vertices, template_local_matrix).astype(np.float32)
     try:
         aligned.fix_normals()
     except Exception:
@@ -1001,7 +1126,7 @@ class TextureService:
         textured_mesh = paint(generated_mesh, image=conditioning)
         log_step("generated character mesh textured")
         textured_mesh = align_mesh_to_template_bounds(textured_mesh, template_path)
-        log_step("aligned generated mesh to template bounds")
+        log_step("aligned generated mesh to template local frame")
         preview_path = job_dir / "generated_character_preview.glb"
         textured_mesh.export(str(preview_path))
         normalize_glb_character_materials(preview_path)
@@ -1041,20 +1166,18 @@ class TextureService:
             rig_template = None
             if preserve_rig and rigged_glb:
                 rig_template = input_copy
-            elif preserve_rig and EXAMPLE_MESH.exists():
-                rig_template = EXAMPLE_MESH
 
             if rig_template is not None:
                 final_path = job_dir / "generated_character_rigged.glb"
                 transfer_rig_to_generated_glb(rig_template, preview_path, final_path)
                 log_step(f"rigged final GLB exported: {final_path.name}")
-                if rigged_glb:
-                    status = "Generated new character geometry from the image, textured it, and transferred the original rig onto the generated mesh."
-                else:
-                    status = "Generated new character geometry from the image, textured it, and transferred the bundled Geno rig onto the generated mesh."
+                status = "Generated new character geometry from the image, textured it, and transferred the source rig onto the generated mesh."
                 return TextureResult(final_path, conditioning_path, status, preview_path)
 
-            status = "Generated and textured new character geometry. No rig was transferred because rig transfer was disabled."
+            if preserve_rig:
+                status = "Generated and textured new character geometry. No rig was transferred because the source mesh is not a rigged GLB."
+            else:
+                status = "Generated and textured new character geometry. No rig was transferred because rig transfer was disabled."
             return TextureResult(preview_path, conditioning_path, status, preview_path)
 
         if mode == "image":
@@ -1120,28 +1243,18 @@ class TextureService:
 
 service = None
 
-TARGET_GENO = "Geno biped"
-TARGET_DOG = "Dog quadruped"
-TARGET_CUSTOM = "Custom GLB"
+OUTPUT_EMPTY_STATUS = "No output yet."
 
 
 def run_ui(
     mesh_path: Optional[str],
-    target_rig: str,
     image_path: Optional[str],
     prompt: str,
     texture_mode: str,
     preserve_rig: bool,
 ):
-    mode = normalize_texture_mode(texture_mode, Path(image_path) if image_path else None)
-    if target_rig == TARGET_GENO:
-        mesh_path = str(EXAMPLE_MESH)
-    elif target_rig == TARGET_DOG:
-        mesh_path = str(QUADRUPED_EXAMPLE_MESH)
-    elif not mesh_path and mode == "character" and EXAMPLE_MESH.exists():
-        mesh_path = str(EXAMPLE_MESH)
     if not mesh_path:
-        raise gr.Error("Choose a bundled rig template or upload a custom GLB.")
+        raise gr.Error("Upload a source GLB or choose a bundled example.")
     if service is None:
         raise gr.Error("Service is not initialized.")
     try:
@@ -1154,81 +1267,44 @@ def run_ui(
         )
         return (
             gr.update(visible=True, value=str(result.conditioning_image_path)),
+            gr.update(value=str(result.output_path)),
             gr.update(visible=True, value=str(result.output_path)),
-            gr.update(visible=True, value=str(result.output_path)),
-            gr.update(visible=True, value=result.status),
-            gr.update(visible=False),
+            gr.update(value=result.status),
         )
     except Exception as exc:
         traceback.print_exc()
         raise gr.Error(str(exc))
 
 
-def select_target_rig(target_rig: str):
-    custom_visible = target_rig == TARGET_CUSTOM
-    if target_rig == TARGET_GENO:
-        mesh_path = str(EXAMPLE_MESH)
-        status = "Selected: Geno biped rig. Output is intended for the biped locomotion demo."
-    elif target_rig == TARGET_DOG:
-        mesh_path = str(QUADRUPED_EXAMPLE_MESH)
-        status = "Selected: Dog quadruped rig. Output is intended for the quadruped locomotion demo."
-    else:
-        mesh_path = None
-        status = "Selected: Custom GLB. Upload a rigged mesh below."
-    return (
-        mesh_path,
-        gr.update(visible=custom_visible),
-        status,
-    )
-
-
 def load_bundled_mesh(mesh_path: Path):
     if not mesh_path.exists():
         raise gr.Error(f"Bundled demo mesh is missing: {mesh_path.name}")
-    return str(mesh_path)
+    return (
+        str(mesh_path),
+        gr.update(value=str(mesh_path)),
+    )
 
 
 def load_bundled_geno_mesh():
-    return (
-        TARGET_GENO,
-        str(EXAMPLE_MESH),
-        gr.update(visible=False),
-        "Selected: Geno biped rig. Output is intended for the biped locomotion demo.",
-    )
+    return load_bundled_mesh(EXAMPLE_MESH)
 
 
 def load_bundled_quadruped_mesh():
-    return (
-        TARGET_DOG,
-        str(QUADRUPED_EXAMPLE_MESH),
-        gr.update(visible=False),
-        "Selected: Dog quadruped rig. Output is intended for the quadruped locomotion demo.",
-    )
+    return load_bundled_mesh(QUADRUPED_EXAMPLE_MESH)
 
 
-def custom_mesh_uploaded(mesh_path: Optional[str]):
+def source_mesh_changed(mesh_path: Optional[str]):
     if mesh_path:
-        return (
-            TARGET_CUSTOM,
-            mesh_path,
-            gr.update(visible=True),
-            f"Selected: Custom GLB ({Path(mesh_path).name}).",
-        )
-    return (
-        TARGET_CUSTOM,
-        None,
-        gr.update(visible=True),
-        "Selected: Custom GLB. Upload a rigged mesh below.",
-    )
+        return mesh_path
+    return None
 
 
 def clear_outputs():
     return (
         gr.update(visible=False, value=None),
+        gr.update(value=None),
         gr.update(visible=False, value=None),
-        gr.update(visible=False, value=None),
-        gr.update(visible=False, value=""),
-        gr.update(visible=True),
+        gr.update(value=OUTPUT_EMPTY_STATUS),
     )
 
 
@@ -1238,40 +1314,36 @@ def build_ui():
             """
             # Texturizer
 
-            Pick a target rig, add a reference image or prompt, then generate a textured GLB.
-            Bundled rigs preserve the AI4Animation skeleton contracts for biped and quadruped demos.
+            Upload a source mesh or start from a bundled example, then add a reference image or prompt.
             """
         )
-        with gr.Row():
-            with gr.Column():
-                mesh_input = gr.File(
-                    label="Custom mesh",
-                    file_types=[".glb", ".gltf", ".obj"],
-                    type="filepath",
-                    visible=False,
-                )
-                target_rig_input = gr.Radio(
-                    choices=[TARGET_GENO, TARGET_DOG, TARGET_CUSTOM],
-                    value=TARGET_GENO,
-                    label="Target rig",
-                )
-                selected_mesh_state = gr.State(str(EXAMPLE_MESH))
-                target_status = gr.Markdown("Selected: Geno biped rig. Output is intended for the biped locomotion demo.")
-                with gr.Row():
-                    with gr.Column():
-                        gr.Model3D(
-                            value=str(EXAMPLE_MESH) if EXAMPLE_MESH.exists() else None,
-                            label="Geno biped preset",
-                            height=180,
-                        )
-                        bundled_geno_button = gr.Button("Select Geno")
-                    with gr.Column():
-                        gr.Model3D(
-                            value=str(QUADRUPED_EXAMPLE_MESH) if QUADRUPED_EXAMPLE_MESH.exists() else None,
-                            label="Dog quadruped preset",
-                            height=180,
-                        )
-                        bundled_quadruped_button = gr.Button("Select Dog")
+        with gr.Row(equal_height=False):
+            with gr.Column(scale=1, min_width=420):
+                selected_mesh_state = gr.State(None)
+                with gr.Group():
+                    source_mesh_input = gr.Model3D(
+                        value=None,
+                        label="Source mesh",
+                        height=320,
+                        interactive=True,
+                    )
+                    with gr.Row(variant="compact", equal_height=True):
+                        with gr.Column(scale=1, min_width=180):
+                            gr.Model3D(
+                                value=str(EXAMPLE_MESH) if EXAMPLE_MESH.exists() else None,
+                                label="Geno biped",
+                                height=150,
+                                interactive=False,
+                            )
+                            bundled_geno_button = gr.Button("Use Geno biped", size="sm")
+                        with gr.Column(scale=1, min_width=180):
+                            gr.Model3D(
+                                value=str(QUADRUPED_EXAMPLE_MESH) if QUADRUPED_EXAMPLE_MESH.exists() else None,
+                                label="Dog quadruped",
+                                height=150,
+                                interactive=False,
+                            )
+                            bundled_quadruped_button = gr.Button("Use Dog quadruped", size="sm")
                 image_input = gr.Image(label="Reference image", type="filepath")
                 texture_mode_input = gr.Radio(
                     choices=TEXTURE_MODE_CHOICES,
@@ -1288,51 +1360,52 @@ def build_ui():
                     value=True,
                 )
                 submit = gr.Button("Texturize", variant="primary")
-            with gr.Column():
-                empty_output = gr.Markdown("Output preview will appear here after texturizing.")
+            with gr.Column(scale=1, min_width=420):
                 conditioning_output = gr.Image(label="Source or conditioning image", visible=False)
-                model_output = gr.Model3D(label="Final GLB preview", visible=False)
+                model_output = gr.Model3D(
+                    value=None,
+                    label="Final GLB preview",
+                    height=420,
+                    visible=True,
+                )
                 file_output = gr.File(label="Download final GLB", visible=False)
-                status_output = gr.Textbox(label="Status", lines=4, visible=False)
+                status_output = gr.Textbox(
+                    label="Status",
+                    value=OUTPUT_EMPTY_STATUS,
+                    lines=4,
+                    interactive=False,
+                    visible=True,
+                )
 
-        target_rig_input.change(
-            fn=select_target_rig,
-            inputs=target_rig_input,
-            outputs=[selected_mesh_state, mesh_input, target_status],
+        source_mesh_input.change(
+            fn=source_mesh_changed,
+            inputs=source_mesh_input,
+            outputs=[selected_mesh_state],
         ).then(
             fn=clear_outputs,
-            outputs=[conditioning_output, model_output, file_output, status_output, empty_output],
+            outputs=[conditioning_output, model_output, file_output, status_output],
         )
 
         bundled_geno_button.click(
             fn=load_bundled_geno_mesh,
-            outputs=[target_rig_input, selected_mesh_state, mesh_input, target_status],
+            outputs=[selected_mesh_state, source_mesh_input],
         ).then(
             fn=clear_outputs,
-            outputs=[conditioning_output, model_output, file_output, status_output, empty_output],
+            outputs=[conditioning_output, model_output, file_output, status_output],
         )
 
         bundled_quadruped_button.click(
             fn=load_bundled_quadruped_mesh,
-            outputs=[target_rig_input, selected_mesh_state, mesh_input, target_status],
+            outputs=[selected_mesh_state, source_mesh_input],
         ).then(
             fn=clear_outputs,
-            outputs=[conditioning_output, model_output, file_output, status_output, empty_output],
-        )
-
-        mesh_input.change(
-            fn=custom_mesh_uploaded,
-            inputs=mesh_input,
-            outputs=[target_rig_input, selected_mesh_state, mesh_input, target_status],
-        ).then(
-            fn=clear_outputs,
-            outputs=[conditioning_output, model_output, file_output, status_output, empty_output],
+            outputs=[conditioning_output, model_output, file_output, status_output],
         )
 
         submit.click(
             fn=run_ui,
-            inputs=[selected_mesh_state, target_rig_input, image_input, prompt_input, texture_mode_input, preserve_rig_input],
-            outputs=[conditioning_output, model_output, file_output, status_output, empty_output],
+            inputs=[selected_mesh_state, image_input, prompt_input, texture_mode_input, preserve_rig_input],
+            outputs=[conditioning_output, model_output, file_output, status_output],
         )
 
     return demo
