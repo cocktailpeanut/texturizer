@@ -1120,19 +1120,28 @@ class TextureService:
 
 service = None
 
+TARGET_GENO = "Geno biped"
+TARGET_DOG = "Dog quadruped"
+TARGET_CUSTOM = "Custom GLB"
+
 
 def run_ui(
     mesh_path: Optional[str],
+    target_rig: str,
     image_path: Optional[str],
     prompt: str,
     texture_mode: str,
     preserve_rig: bool,
 ):
     mode = normalize_texture_mode(texture_mode, Path(image_path) if image_path else None)
-    if not mesh_path and mode == "character" and EXAMPLE_MESH.exists():
+    if target_rig == TARGET_GENO:
+        mesh_path = str(EXAMPLE_MESH)
+    elif target_rig == TARGET_DOG:
+        mesh_path = str(QUADRUPED_EXAMPLE_MESH)
+    elif not mesh_path and mode == "character" and EXAMPLE_MESH.exists():
         mesh_path = str(EXAMPLE_MESH)
     if not mesh_path:
-        raise gr.Error("Upload a mesh first.")
+        raise gr.Error("Choose a bundled rig template or upload a custom GLB.")
     if service is None:
         raise gr.Error("Service is not initialized.")
     try:
@@ -1144,6 +1153,193 @@ def run_ui(
             texture_mode,
         )
         return (
+            gr.update(visible=True, value=str(result.conditioning_image_path)),
+            gr.update(visible=True, value=str(result.output_path)),
+            gr.update(visible=True, value=str(result.output_path)),
+            gr.update(visible=True, value=result.status),
+            gr.update(visible=False),
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        raise gr.Error(str(exc))
+
+
+def select_target_rig(target_rig: str):
+    custom_visible = target_rig == TARGET_CUSTOM
+    if target_rig == TARGET_GENO:
+        mesh_path = str(EXAMPLE_MESH)
+        status = "Selected: Geno biped rig. Output is intended for the biped locomotion demo."
+    elif target_rig == TARGET_DOG:
+        mesh_path = str(QUADRUPED_EXAMPLE_MESH)
+        status = "Selected: Dog quadruped rig. Output is intended for the quadruped locomotion demo."
+    else:
+        mesh_path = None
+        status = "Selected: Custom GLB. Upload a rigged mesh below."
+    return (
+        mesh_path,
+        gr.update(visible=custom_visible),
+        status,
+    )
+
+
+def load_bundled_mesh(mesh_path: Path):
+    if not mesh_path.exists():
+        raise gr.Error(f"Bundled demo mesh is missing: {mesh_path.name}")
+    return str(mesh_path)
+
+
+def load_bundled_geno_mesh():
+    return (
+        TARGET_GENO,
+        str(EXAMPLE_MESH),
+        gr.update(visible=False),
+        "Selected: Geno biped rig. Output is intended for the biped locomotion demo.",
+    )
+
+
+def load_bundled_quadruped_mesh():
+    return (
+        TARGET_DOG,
+        str(QUADRUPED_EXAMPLE_MESH),
+        gr.update(visible=False),
+        "Selected: Dog quadruped rig. Output is intended for the quadruped locomotion demo.",
+    )
+
+
+def custom_mesh_uploaded(mesh_path: Optional[str]):
+    if mesh_path:
+        return (
+            TARGET_CUSTOM,
+            mesh_path,
+            gr.update(visible=True),
+            f"Selected: Custom GLB ({Path(mesh_path).name}).",
+        )
+    return (
+        TARGET_CUSTOM,
+        None,
+        gr.update(visible=True),
+        "Selected: Custom GLB. Upload a rigged mesh below.",
+    )
+
+
+def clear_outputs():
+    return (
+        gr.update(visible=False, value=None),
+        gr.update(visible=False, value=None),
+        gr.update(visible=False, value=None),
+        gr.update(visible=False, value=""),
+        gr.update(visible=True),
+    )
+
+
+def build_ui():
+    with gr.Blocks(title="Texturizer") as demo:
+        gr.Markdown(
+            """
+            # Texturizer
+
+            Pick a target rig, add a reference image or prompt, then generate a textured GLB.
+            Bundled rigs preserve the AI4Animation skeleton contracts for biped and quadruped demos.
+            """
+        )
+        with gr.Row():
+            with gr.Column():
+                mesh_input = gr.File(
+                    label="Custom mesh",
+                    file_types=[".glb", ".gltf", ".obj"],
+                    type="filepath",
+                    visible=False,
+                )
+                target_rig_input = gr.Radio(
+                    choices=[TARGET_GENO, TARGET_DOG, TARGET_CUSTOM],
+                    value=TARGET_GENO,
+                    label="Target rig",
+                )
+                selected_mesh_state = gr.State(str(EXAMPLE_MESH))
+                target_status = gr.Markdown("Selected: Geno biped rig. Output is intended for the biped locomotion demo.")
+                with gr.Row():
+                    with gr.Column():
+                        gr.Model3D(
+                            value=str(EXAMPLE_MESH) if EXAMPLE_MESH.exists() else None,
+                            label="Geno biped preset",
+                            height=180,
+                        )
+                        bundled_geno_button = gr.Button("Select Geno")
+                    with gr.Column():
+                        gr.Model3D(
+                            value=str(QUADRUPED_EXAMPLE_MESH) if QUADRUPED_EXAMPLE_MESH.exists() else None,
+                            label="Dog quadruped preset",
+                            height=180,
+                        )
+                        bundled_quadruped_button = gr.Button("Select Dog")
+                image_input = gr.Image(label="Reference image", type="filepath")
+                texture_mode_input = gr.Radio(
+                    choices=TEXTURE_MODE_CHOICES,
+                    value=CHARACTER_TEXTURE_MODE,
+                    label="Texture mode",
+                )
+                prompt_input = gr.Textbox(
+                    label="Prompt",
+                    placeholder="Used when no image is uploaded.",
+                    lines=3,
+                )
+                preserve_rig_input = gr.Checkbox(
+                    label="Transfer/preserve rig when possible",
+                    value=True,
+                )
+                submit = gr.Button("Texturize", variant="primary")
+            with gr.Column():
+                empty_output = gr.Markdown("Output preview will appear here after texturizing.")
+                conditioning_output = gr.Image(label="Source or conditioning image", visible=False)
+                model_output = gr.Model3D(label="Final GLB preview", visible=False)
+                file_output = gr.File(label="Download final GLB", visible=False)
+                status_output = gr.Textbox(label="Status", lines=4, visible=False)
+
+        target_rig_input.change(
+            fn=select_target_rig,
+            inputs=target_rig_input,
+            outputs=[selected_mesh_state, mesh_input, target_status],
+        ).then(
+            fn=clear_outputs,
+            outputs=[conditioning_output, model_output, file_output, status_output, empty_output],
+        )
+
+        bundled_geno_button.click(
+            fn=load_bundled_geno_mesh,
+            outputs=[target_rig_input, selected_mesh_state, mesh_input, target_status],
+        ).then(
+            fn=clear_outputs,
+            outputs=[conditioning_output, model_output, file_output, status_output, empty_output],
+        )
+
+        bundled_quadruped_button.click(
+            fn=load_bundled_quadruped_mesh,
+            outputs=[target_rig_input, selected_mesh_state, mesh_input, target_status],
+        ).then(
+            fn=clear_outputs,
+            outputs=[conditioning_output, model_output, file_output, status_output, empty_output],
+        )
+
+        mesh_input.change(
+            fn=custom_mesh_uploaded,
+            inputs=mesh_input,
+            outputs=[target_rig_input, selected_mesh_state, mesh_input, target_status],
+        ).then(
+            fn=clear_outputs,
+            outputs=[conditioning_output, model_output, file_output, status_output, empty_output],
+        )
+
+        submit.click(
+            fn=run_ui,
+            inputs=[selected_mesh_state, target_rig_input, image_input, prompt_input, texture_mode_input, preserve_rig_input],
+            outputs=[conditioning_output, model_output, file_output, status_output, empty_output],
+        )
+
+    return demo
+
+
+def _legacy_build_ui_removed():
+    return None
             str(result.conditioning_image_path),
             str(result.output_path),
             str(result.output_path),
