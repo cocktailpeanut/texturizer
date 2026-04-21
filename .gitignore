@@ -1,8 +1,12 @@
 .DS_Store
 node_modules
 logs
+cache
+.pinokio-temp
 app/env
 app/hunyuan3d
+app/models
+app/cache
 app/gradio_cache
 app/outputs
 app/uploads

@@ -19,11 +19,41 @@ module.exports = {
     method: "shell.run",
     params: {
       build: true,
+      env: {
+        USE_NINJA: 0,
+        DISTUTILS_USE_SDK: 1
+      },
       venv: "../env",
       path: "app/hunyuan3d",
       message: [
+        "uv pip install setuptools==65.5.0 wheel typing_extensions filelock fsspec jinja2 networkx sympy==1.14.0",
+        "{{gpu === 'nvidia' ? 'uv pip install --no-cache --force-reinstall --no-binary diso --no-build-isolation diso==0.1.4' : null}}",
         "uv pip install -r requirements.txt",
         "uv pip install -e ."
+      ]
+    }
+  }, {
+    method: "script.start",
+    params: {
+      uri: "torch.js",
+      params: {
+        venv: "env",
+        path: "app"
+      }
+    }
+  }, {
+    when: "{{gpu === 'nvidia'}}",
+    method: "shell.run",
+    params: {
+      build: true,
+      env: {
+        USE_NINJA: 0,
+        DISTUTILS_USE_SDK: 1
+      },
+      venv: "../env",
+      path: "app/hunyuan3d",
+      message: [
+        "uv pip install --no-cache --force-reinstall --no-binary diso --no-build-isolation diso==0.1.4"
       ]
     }
   }, {

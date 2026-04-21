@@ -9,7 +9,7 @@ module.exports = {
         PYTHONUNBUFFERED: "1"
       },
       message: [
-        "python app.py --host 127.0.0.1 --port {{port}} --profile 4"
+        "python app.py --host 127.0.0.1 --port {{port}} --profile auto"
       ],
       on: [{
         event: "/(http:\\/\\/[0-9.:]+)/",
