@@ -1,0 +1,5 @@
+{
+  "title": "Texturizer",
+  "icon": "icon.svg",
+  "description": "Minimal NVIDIA-first web app for texturing existing meshes with Hunyuan3D-2GP/mmgp while preserving rigged GLB structure when the vertex layout stays compatible."
+}

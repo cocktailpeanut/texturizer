@@ -1,0 +1,10 @@
+.DS_Store
+node_modules
+logs
+app/env
+app/hunyuan3d
+app/gradio_cache
+app/outputs
+app/uploads
+app/__pycache__
+
