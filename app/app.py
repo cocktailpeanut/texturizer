@@ -43,6 +43,7 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "outputs"
 EXAMPLE_MESH = BASE_DIR / "examples" / "geno.glb"
+QUADRUPED_EXAMPLE_MESH = BASE_DIR / "examples" / "dog.glb"
 LOCAL_MODELS_DIR = BASE_DIR / "models"
 TEXTURE_MODEL_REPO = "tencent/Hunyuan3D-2"
 TEXTURE_MODEL_FOLDERS = ("hunyuan3d-delight-v2-0", "hunyuan3d-paint-v2-0")
@@ -1153,10 +1154,18 @@ def run_ui(
         raise gr.Error(str(exc))
 
 
-def load_bundled_mesh():
-    if not EXAMPLE_MESH.exists():
-        raise gr.Error("Bundled demo mesh is missing.")
-    return str(EXAMPLE_MESH)
+def load_bundled_mesh(mesh_path: Path):
+    if not mesh_path.exists():
+        raise gr.Error(f"Bundled demo mesh is missing: {mesh_path.name}")
+    return str(mesh_path)
+
+
+def load_bundled_geno_mesh():
+    return load_bundled_mesh(EXAMPLE_MESH)
+
+
+def load_bundled_quadruped_mesh():
+    return load_bundled_mesh(QUADRUPED_EXAMPLE_MESH)
 
 
 def build_ui():
@@ -1168,13 +1177,28 @@ def build_ui():
             Upload an existing mesh and a reference image, or use a prompt.
             The default mode uses Hunyuan to generate a new character mesh from the image,
             texture it, then transfer the rig from the selected GLB when possible.
-            The bundled `geno.glb` example matches the AI4Animation biped default mesh.
+            The bundled examples match the AI4Animation biped and quadruped default rigs.
             """
         )
         with gr.Row():
             with gr.Column():
                 mesh_input = gr.File(label="Mesh", file_types=[".glb", ".gltf", ".obj"], type="filepath")
-                bundled_mesh_button = gr.Button("Use bundled Geno demo mesh")
+                gr.Markdown("### Bundled rig templates")
+                with gr.Row():
+                    with gr.Column():
+                        gr.Model3D(
+                            value=str(EXAMPLE_MESH) if EXAMPLE_MESH.exists() else None,
+                            label="Geno biped",
+                            height=220,
+                        )
+                        bundled_geno_button = gr.Button("Use Geno biped rig")
+                    with gr.Column():
+                        gr.Model3D(
+                            value=str(QUADRUPED_EXAMPLE_MESH) if QUADRUPED_EXAMPLE_MESH.exists() else None,
+                            label="Dog quadruped",
+                            height=220,
+                        )
+                        bundled_quadruped_button = gr.Button("Use Dog quadruped rig")
                 image_input = gr.Image(label="Image", type="filepath")
                 texture_mode_input = gr.Radio(
                     choices=TEXTURE_MODE_CHOICES,
@@ -1197,8 +1221,13 @@ def build_ui():
                 file_output = gr.File(label="Download final GLB")
                 status_output = gr.Textbox(label="Status", lines=4)
 
-        bundled_mesh_button.click(
-            fn=load_bundled_mesh,
+        bundled_geno_button.click(
+            fn=load_bundled_geno_mesh,
+            outputs=mesh_input,
+        )
+
+        bundled_quadruped_button.click(
+            fn=load_bundled_quadruped_mesh,
             outputs=mesh_input,
         )
 

@@ -4,7 +4,7 @@ Texturizer is a minimal Pinokio web app for turning one image into a textured ch
 
 The intended workflow is:
 
-1. Upload a rigged `.glb`, or use the bundled Geno demo mesh.
+1. Upload a rigged `.glb`, or use one of the bundled AI4Animation demo meshes.
 2. Upload an image, or provide a text prompt for AI mode.
 3. Use the default generated-character mode.
 4. Generate a textured character output.
@@ -28,19 +28,20 @@ The intended workflow is:
 
 1. Click `Install`.
 2. Click `Start Web App`.
-3. Upload a mesh, or click `Use bundled Geno demo mesh`.
+3. Upload a mesh, or select one of the bundled rig templates.
 4. Upload an image or enter a prompt.
 5. Leave texture mode on `Generate character geometry + transfer rig` for the normal workflow.
 6. Leave rig transfer enabled if you need the result attached to the selected/bundled skeleton.
 7. Download the output `.glb`.
 
-## Bundled example
+## Bundled examples
 
-The launcher now includes the AI4Animation biped default mesh as:
+The launcher includes the AI4Animation default rigged meshes as:
 
 - `app/examples/geno.glb`
+- `app/examples/dog.glb`
 
-This is the main intended path when you want to generate a character from an image and bring it back into AI4Animation with the Geno skeleton contract.
+`geno.glb` matches the biped/Geno skeleton contract. `dog.glb` matches the quadruped locomotion skeleton contract. The web UI shows both as 3D previews so you can choose the target rig visually instead of selecting a text-only button.
 
 ## API
 
