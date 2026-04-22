@@ -62,18 +62,10 @@ module.exports = {
     when: "{{platform === 'win32'}}",
     method: "shell.run",
     params: {
-      build: true,
-      venv: "../../../../env",
-      env: {
-        USE_NINJA: 0,
-        DISTUTILS_USE_SDK: 1
-      },
-      path: "app/hunyuan3d/hy3dgen/texgen/custom_rasterizer",
+      venv: "env",
+      path: "app",
       message: [
-        "where link",
-        "where cl",
-        "set",
-        "python setup.py install"
+        "uv pip install --force-reinstall https://raw.githubusercontent.com/pinokiofactory/Hunyuan3d-2-lowvram/main/wheels/custom_rasterizer-0.1-cp310-cp310-win_amd64.whl"
       ]
     }
   }, {
@@ -96,15 +88,10 @@ module.exports = {
     when: "{{platform === 'win32'}}",
     method: "shell.run",
     params: {
-      build: true,
-      venv: "../../../../env",
-      env: {
-        USE_NINJA: 0,
-        DISTUTILS_USE_SDK: 1
-      },
-      path: "app/hunyuan3d/hy3dgen/texgen/differentiable_renderer",
+      venv: "env",
+      path: "app",
       message: [
-        "python setup.py install"
+        "uv pip install --force-reinstall https://raw.githubusercontent.com/pinokiofactory/Hunyuan3d-2-lowvram/main/wheels/mesh_processor-0.0.0-cp310-cp310-win_amd64.whl"
       ]
     }
   }]
