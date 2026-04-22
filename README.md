@@ -6,7 +6,7 @@ The intended workflow is:
 
 1. Upload a rigged `.glb`, or use one of the bundled AI4Animation demo meshes.
 2. Upload an image, or provide a text prompt for AI mode.
-3. Use the default generated-character mode.
+3. Use the default `New character + rig transfer` mode.
 4. Generate a textured character output.
 5. If the selected source mesh is rigged, Texturizer transfers that skeleton onto the generated mesh.
 
@@ -30,9 +30,15 @@ The intended workflow is:
 2. Click `Start Web App`.
 3. Upload a source mesh, or choose `Geno biped` or `Dog quadruped` from the compact example previews.
 4. Upload an image or enter a prompt.
-5. Leave texture mode on `Generate character geometry + transfer rig` for the normal workflow.
+5. Leave texture mode on `New character + rig transfer` for the normal workflow.
 6. Leave rig transfer enabled if you need the result attached to the selected source skeleton.
 7. Download the output `.glb`.
+
+## Texture modes
+
+- `New character + rig transfer`: creates a new Hunyuan character mesh from the image or prompt, then transfers the selected source rig when possible. This is the default workflow.
+- `Retexture existing mesh`: keeps the uploaded mesh geometry and rig, then generates a new material/texture from the image or prompt.
+- `Apply exact UV map`: applies the uploaded image directly as the UV texture. Use this only when the image is already a UV map for that mesh.
 
 ## Bundled examples
 
@@ -61,7 +67,7 @@ Multipart form fields:
 - `reference_image`: optional reference image file
 - `prompt`: optional text prompt
 - `preserve_rig`: optional boolean, defaults to `true`
-- `texture_mode`: optional mode. Omit it, or use `character`, for the generated-character rig-transfer path. Use `ai` to only infer a texture on the existing mesh. Use `image` only when `reference_image` is already an exact UV texture map.
+- `texture_mode`: optional mode. Omit it, or use `character`, for `New character + rig transfer`. Use `ai` for `Retexture existing mesh`. Use `image` for `Apply exact UV map` only when `reference_image` is already an exact UV texture map.
 
 If `texture_mode=character` and `preserve_rig=true`, the server generates new geometry and transfers the uploaded rig onto it. If `texture_mode=ai`, `preserve_rig=true`, and the uploaded file is a rigged `.glb`, the server keeps the original rig and merges only the generated material/texture back into that GLB.
 

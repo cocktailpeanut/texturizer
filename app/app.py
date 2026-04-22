@@ -50,10 +50,53 @@ TEXTURE_MODEL_FOLDERS = ("hunyuan3d-delight-v2-0", "hunyuan3d-paint-v2-0")
 SHAPE_MODEL_FOLDERS = ("hunyuan3d-dit-v2-0",)
 SHAPE_MODEL_FILES = ("config.yaml", "model.fp16.safetensors")
 PROMPT_MODEL_REPO = "Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled"
-CHARACTER_TEXTURE_MODE = "Generate character geometry + transfer rig"
-AI_TEXTURE_MODE = "AI infer full texture from image"
-IMAGE_TEXTURE_MODE = "Use image as exact UV texture map"
-TEXTURE_MODE_CHOICES = [CHARACTER_TEXTURE_MODE, AI_TEXTURE_MODE, IMAGE_TEXTURE_MODE]
+CHARACTER_TEXTURE_MODE = "character"
+AI_TEXTURE_MODE = "ai"
+IMAGE_TEXTURE_MODE = "image"
+CHARACTER_TEXTURE_LABEL = (
+    "New character + rig transfer\n"
+    "Creates new Hunyuan geometry, then transfers the selected source rig when possible. Best default."
+)
+AI_TEXTURE_LABEL = (
+    "Retexture existing mesh\n"
+    "Keeps the uploaded geometry and rig, then generates a new material or texture from the image or prompt."
+)
+IMAGE_TEXTURE_LABEL = (
+    "Apply exact UV map\n"
+    "Applies the uploaded image directly as the UV texture. Use only when the image is already a UV map for that mesh."
+)
+TEXTURE_MODE_CHOICES = [
+    (CHARACTER_TEXTURE_LABEL, CHARACTER_TEXTURE_MODE),
+    (AI_TEXTURE_LABEL, AI_TEXTURE_MODE),
+    (IMAGE_TEXTURE_LABEL, IMAGE_TEXTURE_MODE),
+]
+APP_CSS = """
+.texture-mode-radio .wrap {
+  display: grid !important;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+}
+
+.texture-mode-radio label {
+  align-items: flex-start !important;
+  min-height: 4.6rem;
+  padding: 0.7rem 0.95rem !important;
+}
+
+.texture-mode-radio label span {
+  display: block;
+  white-space: pre-line;
+  color: var(--body-text-color-subdued, #6b7280);
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+
+.texture-mode-radio label span::first-line {
+  color: var(--body-text-color, #1f2937);
+  font-size: 1rem;
+  font-weight: 600;
+}
+"""
 TEXTURE_MAX_FACES = 40000
 CHARACTER_BASE_COLOR_FACTOR = [1.0, 1.0, 1.0, 1.0]
 CHARACTER_METALLIC_FACTOR = 0.0
@@ -333,6 +376,8 @@ def normalize_texture_mode(texture_mode: Optional[str], image_path: Optional[Pat
         "full character",
         "generated character",
         "generate character geometry",
+        "generate character geometry + transfer rig",
+        "new character + rig transfer",
         CHARACTER_TEXTURE_MODE.lower(),
     }:
         return "character"
@@ -342,6 +387,8 @@ def normalize_texture_mode(texture_mode: Optional[str], image_path: Optional[Pat
         "uv",
         "map",
         "use image as texture map",
+        "use image as exact uv texture map",
+        "apply exact uv map",
         IMAGE_TEXTURE_MODE.lower(),
     }:
         return "image"
@@ -350,7 +397,9 @@ def normalize_texture_mode(texture_mode: Optional[str], image_path: Optional[Pat
         "hunyuan",
         "generate",
         "reference",
+        "ai infer full texture from image",
         "ai retexture from reference/prompt",
+        "retexture existing mesh",
         AI_TEXTURE_MODE.lower(),
     }:
         return "ai"
@@ -1376,7 +1425,7 @@ def clear_outputs():
 
 
 def build_ui():
-    with gr.Blocks(title="Texturizer") as demo:
+    with gr.Blocks(title="Texturizer", css=APP_CSS) as demo:
         gr.Markdown(
             """
             # Texturizer
@@ -1416,6 +1465,7 @@ def build_ui():
                     choices=TEXTURE_MODE_CHOICES,
                     value=CHARACTER_TEXTURE_MODE,
                     label="Texture mode",
+                    elem_classes=["texture-mode-radio"],
                 )
                 prompt_input = gr.Textbox(
                     label="Prompt",
