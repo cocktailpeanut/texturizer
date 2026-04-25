@@ -30,11 +30,6 @@ from hy3dgen.shapegen import (
 )
 from hy3dgen.texgen import Hunyuan3DPaintPipeline
 
-try:
-    from hy3dgen.text2image import HunyuanDiTPipeline
-except Exception:
-    HunyuanDiTPipeline = None
-
 
 torch.set_default_device("cpu")
 
@@ -49,7 +44,6 @@ TEXTURE_MODEL_REPO = "tencent/Hunyuan3D-2"
 TEXTURE_MODEL_FOLDERS = ("hunyuan3d-delight-v2-0", "hunyuan3d-paint-v2-0")
 SHAPE_MODEL_FOLDERS = ("hunyuan3d-dit-v2-0",)
 SHAPE_MODEL_FILES = ("config.yaml", "model.fp16.safetensors")
-PROMPT_MODEL_REPO = "Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled"
 CHARACTER_TEXTURE_MODE = "character"
 AI_TEXTURE_MODE = "ai"
 IMAGE_TEXTURE_MODE = "image"
@@ -59,7 +53,7 @@ CHARACTER_TEXTURE_LABEL = (
 )
 AI_TEXTURE_LABEL = (
     "Retexture existing mesh\n"
-    "Keeps the uploaded geometry and rig, then generates a new material or texture from the image or prompt."
+    "Keeps the uploaded geometry and rig, then generates a new material or texture from the image."
 )
 IMAGE_TEXTURE_LABEL = (
     "Apply exact UV map\n"
@@ -398,7 +392,7 @@ def normalize_texture_mode(texture_mode: Optional[str], image_path: Optional[Pat
         "generate",
         "reference",
         "ai infer full texture from image",
-        "ai retexture from reference/prompt",
+        "ai retexture from reference",
         "retexture existing mesh",
         AI_TEXTURE_MODE.lower(),
     }:
@@ -1070,7 +1064,6 @@ class TextureService:
         self.mmgp_budget_mb = mmgp_budget_mb
         self.paint_pipeline = None
         self.shape_pipeline = None
-        self.prompt_pipeline = None
         self.background_remover = None
         self.offload_applied = False
 
@@ -1123,8 +1116,6 @@ class TextureService:
                 self.paint_pipeline.models["multiview_model"].pipeline.vae.use_slicing = True
             except Exception:
                 pass
-        if self.prompt_pipeline is not None:
-            pipe.update(offload.extract_models("t2i_worker", self.prompt_pipeline))
         if not pipe:
             return
         profile_no, budget_mb = self.resolve_mmgp_profile()
@@ -1174,32 +1165,16 @@ class TextureService:
             torch.cuda.empty_cache()
         log_step("released Hunyuan shape pipeline from VRAM")
 
-    def ensure_prompt(self):
-        if HunyuanDiTPipeline is None:
-            raise RuntimeError("Prompt-only mode is unavailable because HunyuanDiT could not be imported.")
-        if self.prompt_pipeline is None:
-            prompt_model_path = download_snapshot_to_local(PROMPT_MODEL_REPO)
-            self.prompt_pipeline = HunyuanDiTPipeline(str(prompt_model_path))
-            if self.low_vram:
-                self.apply_mmgp()
-        return self.prompt_pipeline
-
     def ensure_remover(self):
         if self.background_remover is None:
             self.background_remover = BackgroundRemover()
         return self.background_remover
 
-    def build_conditioning_image(self, image_path: Optional[Path], prompt: str, job_dir: Path) -> Path:
-        if image_path is not None:
-            log_step("using uploaded reference image for conditioning")
-            reference_image = open_rgb_image(image_path)
-        else:
-            prompt = (prompt or "").strip()
-            if not prompt:
-                raise RuntimeError("Upload a reference image or enter a prompt.")
-            log_step("generating prompt image for conditioning")
-            prompt_pipeline = self.ensure_prompt()
-            reference_image = prompt_pipeline(prompt)
+    def build_conditioning_image(self, image_path: Optional[Path], job_dir: Path) -> Path:
+        if image_path is None:
+            raise RuntimeError("Upload a reference image.")
+        log_step("using uploaded reference image for conditioning")
+        reference_image = open_rgb_image(image_path)
 
         remover = self.ensure_remover()
         log_step("removing background from conditioning image")
@@ -1253,7 +1228,6 @@ class TextureService:
         self,
         mesh_path: Path,
         image_path: Optional[Path],
-        prompt: str,
         preserve_rig: bool,
         texture_mode: Optional[str] = None,
     ) -> TextureResult:
@@ -1276,7 +1250,7 @@ class TextureService:
         mesh = self.load_mesh_for_texturing(geometry_input)
 
         if mode == "character":
-            conditioning_path = self.build_conditioning_image(image_path, prompt, job_dir)
+            conditioning_path = self.build_conditioning_image(image_path, job_dir)
             preview_path = self.generate_textured_character_mesh(conditioning_path, input_copy, job_dir)
 
             rig_template = None
@@ -1320,7 +1294,7 @@ class TextureService:
                 status = "Applied uploaded image as the existing UV texture map."
             return TextureResult(preview_path, texture_source_path, status, preview_path)
 
-        conditioning_path = self.build_conditioning_image(image_path, prompt, job_dir)
+        conditioning_path = self.build_conditioning_image(image_path, job_dir)
         paint = self.ensure_paint()
         if rigged_glb and preserve_rig:
             if not mesh_has_usable_uv(mesh):
@@ -1365,19 +1339,19 @@ OUTPUT_EMPTY_STATUS = "No output yet."
 def run_ui(
     mesh_path: Optional[str],
     image_path: Optional[str],
-    prompt: str,
     texture_mode: str,
     preserve_rig: bool,
 ):
     if not mesh_path:
         raise gr.Error("Upload a source GLB or choose a bundled example.")
+    if not image_path:
+        raise gr.Error("Upload a reference image.")
     if service is None:
         raise gr.Error("Service is not initialized.")
     try:
         result = service.texture(
             Path(mesh_path),
-            Path(image_path) if image_path else None,
-            prompt or "",
+            Path(image_path),
             preserve_rig,
             texture_mode,
         )
@@ -1430,7 +1404,7 @@ def build_ui():
             """
             # Texturizer
 
-            Upload a source mesh or start from a bundled example, then add a reference image or prompt.
+            Upload a source mesh or start from a bundled example, then add a reference image.
             """
         )
         with gr.Row(equal_height=False):
@@ -1466,11 +1440,6 @@ def build_ui():
                     value=CHARACTER_TEXTURE_MODE,
                     label="Texture mode",
                     elem_classes=["texture-mode-radio"],
-                )
-                prompt_input = gr.Textbox(
-                    label="Prompt",
-                    placeholder="Used when no image is uploaded.",
-                    lines=3,
                 )
                 preserve_rig_input = gr.Checkbox(
                     label="Transfer/preserve rig when possible",
@@ -1521,7 +1490,7 @@ def build_ui():
 
         submit.click(
             fn=run_ui,
-            inputs=[selected_mesh_state, image_input, prompt_input, texture_mode_input, preserve_rig_input],
+            inputs=[selected_mesh_state, image_input, texture_mode_input, preserve_rig_input],
             outputs=[conditioning_output, model_output, file_output, status_output],
         )
 
@@ -1539,8 +1508,7 @@ def health():
 @api.post("/api/texture")
 async def texture_endpoint(
     mesh: UploadFile = File(...),
-    reference_image: Optional[UploadFile] = File(None),
-    prompt: Optional[str] = Form(None),
+    reference_image: UploadFile = File(...),
     preserve_rig: bool = Form(True),
     texture_mode: Optional[str] = Form(None),
 ):
@@ -1550,14 +1518,12 @@ async def texture_endpoint(
     with mesh_path.open("wb") as handle:
         handle.write(await mesh.read())
 
-    image_path = None
-    if reference_image is not None:
-        image_path = UPLOAD_DIR / f"{uuid.uuid4()}_{reference_image.filename}"
-        with image_path.open("wb") as handle:
-            handle.write(await reference_image.read())
+    image_path = UPLOAD_DIR / f"{uuid.uuid4()}_{reference_image.filename}"
+    with image_path.open("wb") as handle:
+        handle.write(await reference_image.read())
 
     try:
-        result = service.texture(mesh_path, image_path, prompt or "", preserve_rig, texture_mode)
+        result = service.texture(mesh_path, image_path, preserve_rig, texture_mode)
         return FileResponse(result.output_path, filename=result.output_path.name, media_type="model/gltf-binary")
     except Exception as exc:
         traceback.print_exc()
