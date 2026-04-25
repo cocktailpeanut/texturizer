@@ -91,7 +91,10 @@ APP_CSS = """
   font-weight: 600;
 }
 """
-TEXTURE_MAX_FACES = 40000
+DEFAULT_MAX_FACES = 40000
+MIN_MAX_FACES = 20000
+MAX_MAX_FACES = 200000
+MAX_FACES_STEP = 10000
 CHARACTER_BASE_COLOR_FACTOR = [1.0, 1.0, 1.0, 1.0]
 CHARACTER_METALLIC_FACTOR = 0.0
 CHARACTER_ROUGHNESS_FACTOR = 0.75
@@ -863,7 +866,14 @@ def orient_mesh_axes_to_template_world(mesh, template_world_positions: np.ndarra
     return oriented
 
 
-def prepare_generated_mesh_for_texture(mesh):
+def normalize_max_faces(max_faces: Optional[int]) -> int:
+    if max_faces is None:
+        return DEFAULT_MAX_FACES
+    return max(MIN_MAX_FACES, min(MAX_MAX_FACES, int(max_faces)))
+
+
+def prepare_generated_mesh_for_texture(mesh, max_faces: Optional[int] = None):
+    max_faces = normalize_max_faces(max_faces)
     if isinstance(mesh, trimesh.Scene):
         mesh = mesh.dump(concatenate=True)
 
@@ -885,9 +895,9 @@ def prepare_generated_mesh_for_texture(mesh):
         log_step(f"degenerate face cleanup skipped: {exc}")
 
     face_count = mesh_face_count(mesh)
-    if face_count > TEXTURE_MAX_FACES:
-        log_step(f"reducing generated mesh from {face_count} to {TEXTURE_MAX_FACES} faces before UV unwrap")
-        mesh = FaceReducer()(mesh, max_facenum=TEXTURE_MAX_FACES)
+    if face_count > max_faces:
+        log_step(f"reducing generated mesh from {face_count} to {max_faces} faces before UV unwrap")
+        mesh = FaceReducer()(mesh, max_facenum=max_faces)
         log_step(f"face reduction complete: {mesh_face_count(mesh)} faces")
     else:
         log_step(f"face reduction not needed: {face_count} faces")
@@ -1187,7 +1197,13 @@ class TextureService:
     def load_mesh_for_texturing(self, mesh_path: Path):
         return load_mesh_geometry(mesh_path)
 
-    def generate_textured_character_mesh(self, conditioning_path: Path, template_path: Path, job_dir: Path) -> Path:
+    def generate_textured_character_mesh(
+        self,
+        conditioning_path: Path,
+        template_path: Path,
+        job_dir: Path,
+        max_faces: Optional[int],
+    ) -> Path:
         conditioning = Image.open(conditioning_path).convert("RGBA")
         shape = self.ensure_shape()
         log_step("generating new character mesh from conditioning image")
@@ -1207,7 +1223,7 @@ class TextureService:
         if self.low_vram:
             self.release_shape()
 
-        generated_mesh = prepare_generated_mesh_for_texture(generated_mesh)
+        generated_mesh = prepare_generated_mesh_for_texture(generated_mesh, max_faces)
         untextured_path = job_dir / "generated_character_untextured.glb"
         generated_mesh.export(str(untextured_path))
         log_step(f"postprocessed untextured GLB exported: {untextured_path.name}")
@@ -1230,6 +1246,7 @@ class TextureService:
         image_path: Optional[Path],
         preserve_rig: bool,
         texture_mode: Optional[str] = None,
+        max_faces: Optional[int] = None,
     ) -> TextureResult:
         if not mesh_path.exists():
             raise RuntimeError("Mesh file does not exist.")
@@ -1251,7 +1268,7 @@ class TextureService:
 
         if mode == "character":
             conditioning_path = self.build_conditioning_image(image_path, job_dir)
-            preview_path = self.generate_textured_character_mesh(conditioning_path, input_copy, job_dir)
+            preview_path = self.generate_textured_character_mesh(conditioning_path, input_copy, job_dir, max_faces)
 
             rig_template = None
             if preserve_rig and rigged_glb:
@@ -1340,6 +1357,7 @@ def run_ui(
     mesh_path: Optional[str],
     image_path: Optional[str],
     texture_mode: str,
+    max_faces: int,
     preserve_rig: bool,
 ):
     if not mesh_path:
@@ -1354,6 +1372,7 @@ def run_ui(
             Path(image_path),
             preserve_rig,
             texture_mode,
+            max_faces,
         )
         return (
             gr.update(visible=True, value=str(result.conditioning_image_path)),
@@ -1441,6 +1460,13 @@ def build_ui():
                     label="Texture mode",
                     elem_classes=["texture-mode-radio"],
                 )
+                max_faces_input = gr.Slider(
+                    minimum=MIN_MAX_FACES,
+                    maximum=MAX_MAX_FACES,
+                    value=DEFAULT_MAX_FACES,
+                    step=MAX_FACES_STEP,
+                    label="Max generated faces",
+                )
                 preserve_rig_input = gr.Checkbox(
                     label="Transfer/preserve rig when possible",
                     value=True,
@@ -1490,7 +1516,7 @@ def build_ui():
 
         submit.click(
             fn=run_ui,
-            inputs=[selected_mesh_state, image_input, texture_mode_input, preserve_rig_input],
+            inputs=[selected_mesh_state, image_input, texture_mode_input, max_faces_input, preserve_rig_input],
             outputs=[conditioning_output, model_output, file_output, status_output],
         )
 
@@ -1511,6 +1537,7 @@ async def texture_endpoint(
     reference_image: UploadFile = File(...),
     preserve_rig: bool = Form(True),
     texture_mode: Optional[str] = Form(None),
+    max_faces: int = Form(DEFAULT_MAX_FACES),
 ):
     if service is None:
         raise HTTPException(status_code=503, detail="Service is not initialized.")
@@ -1523,7 +1550,7 @@ async def texture_endpoint(
         handle.write(await reference_image.read())
 
     try:
-        result = service.texture(mesh_path, image_path, preserve_rig, texture_mode)
+        result = service.texture(mesh_path, image_path, preserve_rig, texture_mode, max_faces)
         return FileResponse(result.output_path, filename=result.output_path.name, media_type="model/gltf-binary")
     except Exception as exc:
         traceback.print_exc()

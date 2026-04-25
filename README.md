@@ -31,14 +31,19 @@ The intended workflow is:
 3. Upload a source mesh, or choose `Geno biped` or `Dog quadruped` from the compact example previews.
 4. Upload a reference image.
 5. Leave texture mode on `New character + rig transfer` for the normal workflow.
-6. Leave rig transfer enabled if you need the result attached to the selected source skeleton.
-7. Download the output `.glb`.
+6. Raise `Max generated faces` if the generated GLB looks too blocky.
+7. Leave rig transfer enabled if you need the result attached to the selected source skeleton.
+8. Download the output `.glb`.
 
 ## Texture modes
 
 - `New character + rig transfer`: creates a new Hunyuan character mesh from the image, then transfers the selected source rig when possible. This is the default workflow.
 - `Retexture existing mesh`: keeps the uploaded mesh geometry and rig, then generates a new material/texture from the image.
 - `Apply exact UV map`: applies the uploaded image directly as the UV texture. Use this only when the image is already a UV map for that mesh.
+
+## Quality settings
+
+- `Max generated faces`: controls the face cap after Hunyuan shape generation in `New character + rig transfer` mode. The default is `40000`. Higher values can preserve smoother silhouettes and clothing detail, but they increase GLB size and can make UV unwrapping/texturing slower.
 
 ## Bundled examples
 
@@ -67,6 +72,7 @@ Multipart form fields:
 - `reference_image`: required reference image file
 - `preserve_rig`: optional boolean, defaults to `true`
 - `texture_mode`: optional mode. Omit it, or use `character`, for `New character + rig transfer`. Use `ai` for `Retexture existing mesh`. Use `image` for `Apply exact UV map` only when `reference_image` is already an exact UV texture map.
+- `max_faces`: optional generated mesh face cap for `character` mode. Defaults to `40000`; accepted values are clamped from `20000` to `200000`.
 
 If `texture_mode=character` and `preserve_rig=true`, the server generates new geometry and transfers the uploaded rig onto it. If `texture_mode=ai`, `preserve_rig=true`, and the uploaded file is a rigged `.glb`, the server keeps the original rig and merges only the generated material/texture back into that GLB.
 
@@ -85,6 +91,7 @@ form.append("mesh", meshFile);
 form.append("reference_image", imageFile);
 form.append("preserve_rig", "true");
 form.append("texture_mode", "character");
+form.append("max_faces", "100000");
 
 const response = await fetch("http://127.0.0.1:7860/api/texture", {
   method: "POST",
@@ -111,7 +118,7 @@ with open("character.glb", "rb") as mesh, open("reference.png", "rb") as image:
             "mesh": ("character.glb", mesh, "model/gltf-binary"),
             "reference_image": ("reference.png", image, "image/png"),
         },
-        data={"preserve_rig": "true", "texture_mode": "character"},
+        data={"preserve_rig": "true", "texture_mode": "character", "max_faces": "100000"},
         timeout=3600,
     )
 
@@ -128,5 +135,6 @@ curl -X POST http://127.0.0.1:7860/api/texture \
   -F "reference_image=@reference.png" \
   -F "preserve_rig=true" \
   -F "texture_mode=character" \
+  -F "max_faces=100000" \
   --output textured.glb
 ```
